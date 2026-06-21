@@ -2,6 +2,6 @@ dev/
 data/
 open3d_env/
 __pycache__/
+
 *.pdf
-archs.txt
 *.obj
