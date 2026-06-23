@@ -7,6 +7,7 @@ from skimage.measure import marching_cubes
 from scripts.geometry.objects import PointCloud, VoxelCube
 from scripts.model.model import Model
 from scripts.utils.clouds import generate_point_cloud
+from tqdm import tqdm
 
 def fill_voxel_cube(PC: PointCloud, VC: VoxelCube):
     arr = PC.points_arr
@@ -73,11 +74,11 @@ def marching_cubes_to_mesh(VC: VoxelCube, ans, sgm):
     return mesh, verts_world, faces
 
 if __name__ == "__main__":
-    M = Model("data/ModelNet10/toilet/train/toilet_0001.off")
+    M = Model("data/ModelNet10/desk/train/desk_0001.off")
     M.normalize()
 
-    PC = generate_point_cloud(M,2000)
-    VC = VoxelCube(size=32, min_bound=-1, max_bound=1)
+    PC = generate_point_cloud(M,20000)
+    VC = VoxelCube(size=64, min_bound=-1, max_bound=1)
     fill_voxel_cube(PC, VC)
 
     PC.visualize_oriented_cloud()

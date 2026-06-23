@@ -73,16 +73,17 @@ def marching_cubes_to_mesh(tree, ans, sgm):
 
     return mesh, verts_world, faces
 
-M = Model("data/ModelNet10/toilet/train/toilet_0001.off")
+M = Model("data/ModelNet10/desk/train/desk_0001.off")
 M.normalize()
-
-PC = generate_point_cloud(M,2000)
-root = OctreeNode(np.array([0.0, 0.0, 0.0]), 2.2, 0)
-tree = Octree(root, PC.points_arr, max_depth=5, min_points=1)
-tree.build()
-leaves = tree.collect_leaves()
-D = 5
+D = 6
 Q = 4
+
+PC = generate_point_cloud(M,10000)
+root = OctreeNode(np.array([0.0, 0.0, 0.0]), 2.2, 0)
+tree = Octree(root, PC.points_arr, max_depth=D, min_points=1)
+tree.build()
+tree.fill_depth_neighborhood(D)
+leaves = tree.collect_leaves()
 
 #visualize_octree(tree, points=PC.points_arr, only_non_empty=True)
 tree.calculate_normals(PC.points_arr, PC.normals_arr, depth=D)
@@ -92,7 +93,7 @@ v = tree.calculate_v(qq=Q, depth=D)
 
 x = lsqr(L, v)[0]
 
-field, gamma = tree.get_dense_field(PC.points_arr, depth=D, x=x, q=32)
+field, gamma = tree.get_dense_field(PC.points_arr, depth=D, x=x, q=128)
 
 print(x.min(), x.max())
 print(np.linalg.norm(x))
