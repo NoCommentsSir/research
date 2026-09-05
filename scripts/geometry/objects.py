@@ -2,6 +2,7 @@ import open3d as o3d
 import numpy as np
 from scipy.sparse import coo_matrix
 from tqdm import tqdm
+from scipy.sparse.linalg import lsmr
 
 class Point:
     def __init__(self, x, y, z, triangle_id):
@@ -202,6 +203,13 @@ class VoxelCube:
     
     def interpolate_vector_field(self, field, p):
         p = np.asarray(p, dtype=np.float64)
+        
+        # Проверяем размерность и добавляем ось, если нужно
+        if p.ndim == 1:
+            p = p[np.newaxis, :]
+            squeeze_result = True
+        else:
+            squeeze_result = False
 
         gx = ((p[:, 0] - self.min_bound) / self.length) * (self.size - 1)
         gy = ((p[:, 1] - self.min_bound) / self.length) * (self.size - 1)
@@ -241,7 +249,7 @@ class VoxelCube:
         w110 = (tx * ty * (1 - tz))[:, None]
         w111 = (tx * ty * tz)[:, None]
 
-        return (
+        result = (
             w000 * c000
             + w001 * c001
             + w010 * c010
@@ -251,7 +259,13 @@ class VoxelCube:
             + w110 * c110
             + w111 * c111
         )
-    
+
+        # Если передавалась одна точка, возвращаем 1D массив
+        if squeeze_result:
+            result = result[0]
+        
+        return result
+
     def interpolate_scalar_field(self, field, p):
         gx = ((p[0] - self.min_bound) / self.length) * (self.size - 1)
         gy = ((p[1] - self.min_bound) / self.length) * (self.size - 1)
@@ -1242,53 +1256,13 @@ class Octree:
 
         return result
     
-    def create_node_at_depth(self, idx, depth:int) -> OctreeNode:
-        idx = np.array(idx, dtype=np.float64)
-        size = self.root.size / 2 ** depth
-        center = - self.root.half_size + (idx + 0.5) * size
-        res =  OctreeNode(
-            center=center,
-            size = size,
-            depth = depth
-        )
-        res.grid_index = idx
-        return res
-
-    
-    def fill_depth_neighborhood(self, depth):
-        nodes = set(self.depth_map[depth].keys())
-        to_add = set()
-        offsets = range(-4, 5)
-        R = 2 ** depth
-
-        for node in nodes:
-                for dx in offsets:
-                    for dy in offsets:
-                        for dz in offsets:
-                            idx = (node[0] + dx, node[1] + dy, node[2] + dz)
-
-                            if not (
-                                0 <= idx[0] < R and
-                                0 <= idx[1] < R and
-                                0 <= idx[2] < R
-                            ):
-                                continue
-
-                            to_add.add(idx)
-
-        for idx in to_add:                    
-            if idx not in self.depth_map[depth]:
-                self.depth_map[depth][idx] = self.create_node_at_depth(idx, depth)
-
-        for i, node in enumerate(self.depth_map[depth].values()):
-            node.node_id = i
-
     def calculate_normals(self, points, normals, depth: int):
         for p, n in zip(points, normals):
             nodes = self.get_8_depth_nodes_with_weights(p, depth)
 
             for node, weight in nodes:
                 node.vector_field += weight * n
+
 
     def calculate_V(self, point, depth):
         res = np.zeros(3, dtype=np.float64)
@@ -1416,6 +1390,137 @@ class Octree:
                         chi += x[node.node_id] * f
 
         return chi
+    
+    def create_node_at_depth(self, idx, depth: int) -> OctreeNode:
+        idx_tuple = tuple(int(v) for v in idx)
+        idx_arr = np.array(idx_tuple, dtype=np.float64)
+
+        size = self.root.size / (2 ** depth)
+        root_min = self.root.center - self.root.half_size
+        center = root_min + (idx_arr + 0.5) * size
+
+        node = OctreeNode(
+            center=center,
+            size=size,
+            depth=depth
+        )
+        node.grid_index = idx_tuple
+        node.indeces = []
+        node.vector_field = np.zeros(3, dtype=np.float64)
+
+        return node
+
+
+    def fill_depth_neighborhood(self, depth, radius=4):
+        if depth not in self.depth_map:
+            self.depth_map[depth] = {}
+
+        existing = set(self.depth_map[depth].keys())
+        to_add = set()
+        offsets = range(-radius, radius + 1)
+        R = 2 ** depth
+
+        for ix, iy, iz in existing:
+            for dx in offsets:
+                for dy in offsets:
+                    for dz in offsets:
+                        idx = (ix + dx, iy + dy, iz + dz)
+
+                        if (
+                            0 <= idx[0] < R
+                            and 0 <= idx[1] < R
+                            and 0 <= idx[2] < R
+                        ):
+                            to_add.add(idx)
+
+        for idx in to_add:
+            if idx not in self.depth_map[depth]:
+                self.depth_map[depth][idx] = self.create_node_at_depth(idx, depth)
+
+        self.assign_node_ids(depth)
+
+
+    def assign_node_ids(self, depth):
+        nodes = list(self.depth_map[depth].values())
+        for i, node in enumerate(nodes):
+            node.node_id = i
+        return nodes
+
+
+    def evaluate_chi_on_nodes(self, points, depth, x):
+        vals = np.zeros(points.shape[0], dtype=np.float64)
+
+        for idx, p in enumerate(points):
+            vals[idx] = self.evaluate_chi(p, depth, x)
+
+        return vals
+
+
+    def prolongate_solution(self, x_coarse, coarse_depth, fine_depth):
+        """
+        Стартовое приближение на fine-depth:
+        x_fine[node] = chi_coarse(center_of_fine_node)
+
+        Это лучше, чем тупо копировать коэффициент parent,
+        потому что коэффициенты basis-функций разных уровней не равны значениям функции.
+        """
+        self.assign_node_ids(coarse_depth)
+        fine_nodes = self.assign_node_ids(fine_depth)
+
+        x_fine = np.zeros(len(fine_nodes), dtype=np.float64)
+
+        for fine_node in fine_nodes:
+            x_fine[fine_node.node_id] = self.evaluate_chi(
+                fine_node.center,
+                coarse_depth,
+                x_coarse
+            )
+
+        return x_fine
+
+
+    def clear_vector_field(self, depth):
+        for node in self.depth_map[depth].values():
+            node.vector_field[:] = 0.0
+
+
+    def solve_hierarchical_poisson(self, normals, max_depth, qq=2, start_depth=3, radius=4):
+        x_prev = None
+        prev_depth = None
+
+        for depth in range(start_depth, max_depth + 1):
+            print(f"Solving depth {depth}")
+
+            self.fill_depth_neighborhood(depth, radius=radius)
+            self.clear_vector_field(depth)
+
+            self.calculate_normals(self.points, normals, depth=depth)
+            self.assign_node_ids(depth)
+
+            L = self.assemble_L(qq=qq, depth=depth)
+            v = self.calculate_v(qq=qq, depth=depth)
+
+            if x_prev is None:
+                x = lsmr(L, v)[0]
+            else:
+                x0 = self.prolongate_solution(
+                    x_prev,
+                    coarse_depth=prev_depth,
+                    fine_depth=depth
+                )
+                x = lsmr(L, v, x0=x0)[0]
+
+            print(
+                "x:",
+                x.min(),
+                x.max(),
+                np.linalg.norm(x)
+            )
+
+            x_prev = x
+            prev_depth = depth
+
+        return x_prev
     
     def get_dense_field(self, points, depth, x, q):
         cnt = len(points)
