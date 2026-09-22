@@ -1,10 +1,8 @@
 import numpy as np
 import open3d as o3d
 
-
 def triangle_area(A, B, C):
     return np.linalg.norm(np.cross(B - A, C - A)) / 2
-
 
 class Model:
     def __init__(self, file):
