@@ -183,5 +183,98 @@ class Model:
         
 
 if __name__ == '__main__':
-    m = Model('data/ModelNet10/bed/test/bed_0516.off')
+    import open3d as o3d
+    import numpy as np
+
+    file = '../data-storage/data/ModelNet10/table/train/table_0035.off'
+
+    m = Model(file)
     m.get_point_cloud(2000)
+
+    points = m.point_cloud.cpu().numpy()
+    normals = m.normals.cpu().numpy()
+
+    # ------------------------------------------------------------
+    # 1. Point cloud
+    # ------------------------------------------------------------
+
+    pcd = o3d.geometry.PointCloud()
+
+    pcd.points = o3d.utility.Vector3dVector(points)
+
+    # ------------------------------------------------------------
+    # 2. Normal arrows as line segments
+    # ------------------------------------------------------------
+
+    # Показываем не каждую нормаль, иначе будет слишком много линий
+    step = 20
+
+    sampled_points = points[::step]
+    sampled_normals = normals[::step]
+
+    # Длина стрелки
+    normal_length = 0.08
+
+    line_points = []
+    lines = []
+
+    for i, (point, normal) in enumerate(
+        zip(sampled_points, sampled_normals)
+    ):
+        start = point
+        end = point + normal * normal_length
+
+        line_points.append(start)
+        line_points.append(end)
+
+        lines.append([
+            2 * i,
+            2 * i + 1
+        ])
+
+    line_set = o3d.geometry.LineSet()
+
+    line_set.points = o3d.utility.Vector3dVector(
+        np.array(line_points)
+    )
+
+    line_set.lines = o3d.utility.Vector2iVector(
+        np.array(lines)
+    )
+
+    # ------------------------------------------------------------
+    # 3. Показываем mesh вместе с normals
+    # ------------------------------------------------------------
+
+    mesh = o3d.geometry.TriangleMesh()
+
+    mesh.vertices = o3d.utility.Vector3dVector(
+        m.vertices.cpu().numpy()
+    )
+
+    mesh.triangles = o3d.utility.Vector3iVector(
+        m.triangles.cpu().numpy()
+    )
+
+    mesh.compute_vertex_normals()
+
+    # Немного прозрачнее глазами не сделать,
+    # но можно включить wireframe через render option вручную.
+
+    print()
+    print('Controls:')
+    print('  mouse drag   - rotate')
+    print('  mouse wheel  - zoom')
+    print('  Q / Esc      - close')
+    print()
+
+    o3d.visualization.draw_geometries(
+        [
+            mesh,
+            pcd,
+            line_set,
+        ],
+        window_name='Mesh + sampled normals',
+        width=1400,
+        height=900
+    )

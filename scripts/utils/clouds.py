@@ -23,6 +23,16 @@ def sample_points(A, B, C, triangle_id):
 def generate_point_cloud(M: Model, n: int):
     vertices = np.array(M.vertices, dtype=float)
     triangles = np.array(M.triangles, dtype=int)
+
+    v0 = vertices[triangles[:, 0]]
+    v1 = vertices[triangles[:, 1]]
+    v2 = vertices[triangles[:, 2]]
+    
+    cross = np.cross(v1 - v0, v2 - v0)
+    areas = 0.5 * np.linalg.norm(cross, axis=1)
+    
+    total_area = areas.sum()
+    probs = areas / total_area
     probs = np.array(M.areas) / (sum(M.areas) + 1e-12)
     triangles_indexes = np.random.choice(len(M.triangles), size=(n,), p=probs)
     triangles = triangles[triangles_indexes]
